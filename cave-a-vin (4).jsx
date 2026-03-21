@@ -1,0 +1,1167 @@
+import { useState, useMemo, useEffect, useRef } from "react";
+
+// ═══════════════════════════════════════════
+// HELPERS & CONSTANTS
+// ═══════════════════════════════════════════
+const GAS_URL = "https://script.google.com/macros/s/AKfycbyJxFmzN7xJUn8H4WK76S25bwWik-aN46nqlV5PQ9gnDQHx6hgzjPHULTyFmK7XAkI/exec";
+const MAX = 25;
+const WINE = {
+  Rouge: { dot: "#9b2030", light: "#c0283f" },
+  Blanc: { dot: "#c4a245", light: "#d4b85a" },
+  "Rosé":  { dot: "#c97080", light: "#d98090" },
+  "Rosé": { dot: "#c97080", light: "#d98090" },
+  Rose:  { dot: "#c97080", light: "#d98090" },
+};
+const wc = c => (WINE[c] || WINE.Rouge).dot;
+
+function emptyForm(rangement = "") {
+  return {
+    nom: "", producteur: "", couleur: "Rouge", annee: "",
+    region: "", appellation: "", sousRegion: "", cepage: "",
+    dateAchat: "", prixAchat: "", lieuAchat: "",
+    boireDes: "", boireJusque: "", image: "",
+    emplacement: "", rangement: String(rangement),
+  };
+}
+
+// ═══════════════════════════════════════════
+// GOOGLE APPS SCRIPT CODE (for settings)
+// ═══════════════════════════════════════════
+const GAS_CODE = `// ─────────────────────────────────────────────────────────────────
+// Cave à vin — Google Apps Script v3
+// - Lecture par nom d'en-tête (robuste si colonnes bougent)
+// - Normalisation des en-têtes avec retours à la ligne
+// - Tout en GET pour éviter les blocages CORS
+// ─────────────────────────────────────────────────────────────────
+const SHEET_ID   = '1z0UvtYSB7zvOSpdo-YPB2eBNi9FKKbYO-a2RcEp-dQ8';
+const SHEET_NAME = 'Ma Cave';
+
+// Correspondance en-têtes normalisés → clés JSON
+// Les en-têtes sont normalisés : retours à la ligne remplacés par espace, trim
+const COL_MAP = {
+  'ref':          'ref',
+  'rangement':    'rangement',
+  "date d'achat": 'dateAchat',
+  "prix d'achat": 'prixAchat',
+  "lieu d'achat": 'lieuAchat',
+  'producteur':   'producteur',
+  'nom':          'nom',
+  'couleur':      'couleur',
+  'annee':        'annee',
+  'annee':        'annee',
+  'region':       'region',
+  'appellation':  'appellation',
+  'sous region':  'sousRegion',
+  'cepage':       'cepage',
+  'emplacement':  'emplacement',
+  'boire des':    'boireDes',
+  'boire jusque': 'boireJusque',
+  'image':        'image',
+};
+
+// Normalise un en-tête : retire accents pour comparaison, minuscules, trim, \n→espace
+function normHdr(h) {
+  return h.toString()
+    .replace(/\r?\n/g, ' ')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+function normCouleur(v) {
+  if (!v) return '';
+  const s = v.toString().trim().toLowerCase();
+  if (s === 'rouge') return 'Rouge';
+  if (s === 'blanc') return 'Blanc';
+  if (s.startsWith('ros')) return 'Rose';
+  return v.toString().trim().charAt(0).toUpperCase() + v.toString().trim().slice(1);
+}
+
+function fmtDate(v) {
+  if (!v) return '';
+  if (v instanceof Date) {
+    const d = v.getDate().toString().padStart(2,'0');
+    const m = (v.getMonth()+1).toString().padStart(2,'0');
+    return d+'/'+m+'/'+v.getFullYear();
+  }
+  return v.toString().trim();
+}
+
+function fmtPrice(v) {
+  if (!v && v !== 0) return '';
+  if (typeof v === 'number') return v.toFixed(2).replace('.',',') + ' €';
+  return v.toString().trim();
+}
+
+function fmtAnnee(v) {
+  if (!v) return '';
+  if (v instanceof Date) return v.getFullYear().toString();
+  const n = parseInt(v.toString().trim());
+  if (!isNaN(n) && n > 1800 && n < 2100) return String(n);
+  return v.toString().trim();
+}
+
+function doGet(e) {
+  const action = (e && e.parameter && e.parameter.action) || 'get';
+  const s    = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_NAME);
+  const all  = s.getDataRange().getValues();
+  const rawHdrs = all[0];
+
+  // Build index map using normalized headers
+  const idx = {};
+  rawHdrs.forEach((h, i) => {
+    const norm = normHdr(h);
+    if (COL_MAP[norm]) idx[COL_MAP[norm]] = i;
+  });
+
+  function cell(row, key) {
+    return idx[key] !== undefined ? row[idx[key]] : '';
+  }
+
+  // ── DEBUG : voir les en-têtes bruts et normalisés ─────────
+  if (action === 'debug') {
+    return json({
+      raw: rawHdrs.map(String),
+      normalized: rawHdrs.map(normHdr),
+      idx: idx
+    });
+  }
+
+  // ── LECTURE ──────────────────────────────────────────────
+  if (action === 'get') {
+    const refIdx = idx['ref'] !== undefined ? idx['ref'] : 0;
+    const rows   = all.slice(1).filter(r => r[refIdx] !== '' && r[refIdx] !== null && r[refIdx] !== undefined);
+    const data   = rows.map(r => ({
+      ref:         String(cell(r,'ref')         || ''),
+      rangement:   cell(r,'rangement') !== '' && cell(r,'rangement') !== null
+                     ? Number(cell(r,'rangement')) : null,
+      dateAchat:   fmtDate(cell(r,'dateAchat')),
+      prixAchat:   fmtPrice(cell(r,'prixAchat')),
+      lieuAchat:   String(cell(r,'lieuAchat')   || ''),
+      producteur:  String(cell(r,'producteur')  || ''),
+      nom:         String(cell(r,'nom')         || ''),
+      couleur:     normCouleur(cell(r,'couleur')),
+      annee:       fmtAnnee(cell(r,'annee')),
+      region:      String(cell(r,'region')      || ''),
+      appellation: String(cell(r,'appellation') || ''),
+      sousRegion:  String(cell(r,'sousRegion')  || ''),
+      cepage:      String(cell(r,'cepage')      || ''),
+      emplacement: String(cell(r,'emplacement') || ''),
+      boireDes:    fmtDate(cell(r,'boireDes')),
+      boireJusque: fmtDate(cell(r,'boireJusque')),
+      image:       String(cell(r,'image')       || ''),
+    }));
+    return json(data);
+  }
+
+  // ── AJOUT ────────────────────────────────────────────────
+  if (action === 'add') {
+    const b       = JSON.parse(decodeURIComponent(e.parameter.data || '{}'));
+    const refIdx  = idx['ref'] !== undefined ? idx['ref'] : 0;
+    const refs    = all.slice(1).map(r => Number(r[refIdx]) || 0);
+    const nextRef = Math.max(0, ...refs) + 1;
+    const row     = new Array(rawHdrs.length).fill('');
+    // Fill each cell using normalized header matching
+    rawHdrs.forEach((h, i) => {
+      const norm = normHdr(h);
+      const key  = COL_MAP[norm];
+      if (key && b[key] !== undefined && b[key] !== '') row[i] = b[key];
+    });
+    row[refIdx] = nextRef;
+    s.appendRow(row);
+    return json({ ok: true, ref: nextRef });
+  }
+
+  // ── RETRAIT ──────────────────────────────────────────────
+  if (action === 'remove') {
+    const ref    = String(e.parameter.ref || '');
+    const refIdx = idx['ref'] !== undefined ? idx['ref'] : 0;
+    for (let i = all.length - 1; i >= 1; i--) {
+      if (String(all[i][refIdx]) === ref) { s.deleteRow(i + 1); break; }
+    }
+    return json({ ok: true });
+  }
+
+  return json({ error: 'action inconnue' });
+}
+
+function json(d) {
+  const o = ContentService.createTextOutput(JSON.stringify(d));
+  o.setMimeType(ContentService.MimeType.JSON);
+  return o;
+}`;
+
+// ═══════════════════════════════════════════
+// CSS
+// ═══════════════════════════════════════════
+const CSS = `
+  .app * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  .app {
+    font-family: Georgia, 'Times New Roman', serif;
+    background: #181210;
+    color: #e8ddd0;
+    min-height: 100vh;
+    max-width: 430px;
+    margin: 0 auto;
+    position: relative;
+    overflow-x: hidden;
+  }
+
+  /* ── HEADER ── */
+  .hdr {
+    padding: 16px 20px 14px;
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid #291f18;
+    background: #181210;
+    position: sticky; top: 0; z-index: 10;
+  }
+  .hdr-title { font-size: 19px; letter-spacing: 0.07em; color: #c4a35a; }
+  .hdr-sub   { font-size: 11px; color: #5a4a3a; letter-spacing: 0.1em; text-transform: uppercase; margin-top: 2px; }
+  .hdr-right { display: flex; gap: 2px; }
+
+  /* ── ICON BTN ── */
+  .ibtn {
+    background: none; border: none; cursor: pointer; padding: 8px;
+    color: #8a7060; border-radius: 8px; display: flex; align-items: center; justify-content: center;
+    transition: background 0.15s, color 0.15s;
+  }
+  .ibtn:active, .ibtn:hover { background: #241c16; color: #c4a35a; }
+
+  /* ── CAVE TABS ── */
+  .cave-tabs { display: flex; gap: 8px; padding: 12px 20px 8px; overflow-x: auto; scrollbar-width: none; }
+  .ctab {
+    padding: 6px 18px; border-radius: 20px; font-size: 13px;
+    border: 1px solid #3a2d22; cursor: pointer; white-space: nowrap;
+    background: none; color: #7a6a5a; font-family: Georgia, serif;
+    transition: all 0.2s;
+  }
+  .ctab.on  { background: #c4a35a; border-color: #c4a35a; color: #181210; }
+  .ctab.add { border-style: dashed; color: #c4a35a; border-color: #c4a35a55; }
+  .ctab.add:hover { border-color: #c4a35a; }
+
+  /* ── SEARCH BAR ── */
+  .sbar { padding: 8px 20px 14px; }
+  .sbar-inner {
+    display: flex; align-items: center; gap: 10px;
+    background: #211a14; border: 1px solid #3a2d22; border-radius: 10px;
+    padding: 10px 14px;
+  }
+  .sbar-input {
+    background: none; border: none; outline: none;
+    color: #e8ddd0; font-size: 14px; flex: 1; font-family: Georgia, serif;
+  }
+  .sbar-input::placeholder { color: #4a3a2a; }
+
+  /* ── CAVE FRAME ── */
+  .cave-wrap { padding: 0 20px 24px; }
+  .cave-frame {
+    border: 1px solid #322619; border-radius: 14px;
+    overflow: hidden; background: #120e0a;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  }
+  .cave-top {
+    background: #1e1610; padding: 10px 18px;
+    display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1px solid #291f18;
+  }
+  .cave-top-label { font-size: 11px; color: #5a4a3a; letter-spacing: 0.12em; text-transform: uppercase; }
+  .cave-top-count { font-size: 11px; color: #8a6040; }
+
+  /* ── SLOT ── */
+  .slot {
+    display: flex; align-items: center; gap: 12px;
+    padding: 0 16px; min-height: 72px;
+    border-bottom: 1px solid #1a1410; cursor: pointer;
+    position: relative; overflow: hidden;
+    transition: background 0.15s;
+  }
+  .slot:last-child { border-bottom: none; }
+  .slot:active, .slot:hover { background: #1e1812; }
+  .slot-fill {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    pointer-events: none; opacity: 0.08;
+    transition: width 0.6s ease;
+  }
+  .slot-num {
+    width: 30px; height: 30px; border-radius: 7px;
+    background: #1c1510; border: 1px solid #322619;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; color: #7a6050; flex-shrink: 0; z-index: 1;
+  }
+  .slot-body { flex: 1; min-width: 0; z-index: 1; padding: 14px 0; }
+  .slot-dots { display: flex; gap: 5px; margin-bottom: 5px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .slot-count { font-size: 13px; color: #c8b89a; }
+  .slot-count.full { color: #c4a35a; }
+  .slot-names { font-size: 11px; color: #5a4a3a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 3px; }
+  .slot-empty { font-size: 12px; color: #2e2218; font-style: italic; }
+  .slot-arrow { color: #2e2218; z-index: 1; flex-shrink: 0; font-size: 18px; }
+
+  /* ── PANEL (slide-in screen) ── */
+  .panel {
+    position: fixed; inset: 0; background: #181210; z-index: 15;
+    overflow-y: auto; -webkit-overflow-scrolling: touch;
+    max-width: 430px; left: 50%; transform: translateX(-50%);
+    animation: pIn 0.22s ease;
+  }
+  @keyframes pIn { from { opacity:0; transform: translateX(calc(-50% + 24px)); } to { transform: translateX(-50%); } }
+
+  .phdr {
+    display: flex; align-items: center; gap: 10px;
+    padding: 14px 20px; border-bottom: 1px solid #291f18;
+    position: sticky; top: 0; background: #181210; z-index: 5;
+  }
+  .phdr-title { font-size: 16px; color: #c4a35a; flex: 1; }
+  .phdr-sub   { font-size: 11px; color: #5a4a3a; letter-spacing: 0.08em; margin-top: 2px; }
+
+  .back {
+    background: none; border: none; cursor: pointer;
+    color: #7a6a5a; font-family: Georgia, serif; font-size: 22px;
+    line-height: 1; padding: 4px 8px 4px 2px; border-radius: 6px;
+    display: flex; align-items: center;
+    transition: color 0.15s;
+  }
+  .back:hover { color: #c4a35a; }
+
+  /* ── BOTTLE LIST ── */
+  .brow {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 20px; border-bottom: 1px solid #1c1610;
+  }
+  .bthumb {
+    width: 46px; height: 46px; border-radius: 8px;
+    background: #1e1812; border: 1px solid #322619;
+    flex-shrink: 0; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 24px;
+  }
+  .bthumb img { width: 100%; height: 100%; object-fit: cover; }
+  .binfo { flex: 1; min-width: 0; cursor: pointer; }
+  .bname { font-size: 14px; color: #e0d4c0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bprod { font-size: 12px; color: #6a5a4a; margin-top: 2px; }
+  .bactions { display: flex; gap: 6px; flex-shrink: 0; }
+  .abtn {
+    width: 34px; height: 34px; border-radius: 8px;
+    border: 1px solid #322619; background: none;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    color: #7a6a5a; transition: all 0.15s;
+  }
+  .abtn:hover { background: #241c16; color: #c4a35a; border-color: #c4a35a55; }
+  .abtn.del { color: #7a2030; }
+  .abtn.del:hover { background: #2a0c12; border-color: #9b203055; color: #c04050; }
+
+  /* ── DETAIL ── */
+  .det { padding: 20px 20px 40px; }
+  .det-hero {
+    background: #1e1812; border-radius: 12px; border: 1px solid #322619;
+    padding: 20px; display: flex; gap: 18px; margin-bottom: 20px;
+  }
+  .det-img {
+    width: 76px; height: 114px; border-radius: 8px;
+    background: #181210; border: 1px solid #322619;
+    flex-shrink: 0; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 36px; opacity: 0.4;
+  }
+  .det-img img { width: 100%; height: 100%; object-fit: cover; opacity: 1; }
+  .det-name { font-size: 17px; color: #e8ddd0; line-height: 1.3; margin-bottom: 4px; }
+  .det-prod { font-size: 13px; color: #8a7060; margin-bottom: 12px; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 11px 3px 7px; border-radius: 20px; font-size: 11px;
+    letter-spacing: 0.07em;
+  }
+  .irow { display: flex; padding: 11px 0; border-bottom: 1px solid #231b14; gap: 14px; }
+  .irow:last-child { border-bottom: none; }
+  .ilabel { font-size: 11px; color: #5a4a3a; width: 110px; flex-shrink: 0; text-transform: uppercase; letter-spacing: 0.07em; padding-top: 2px; }
+  .ivalue { font-size: 13px; color: #d0c4b0; flex: 1; line-height: 1.5; }
+
+  /* ── ADD FORM ── */
+  .aform { padding: 20px; display: flex; flex-direction: column; gap: 15px; padding-bottom: 90px; }
+  .flabel { font-size: 11px; color: #5a4a3a; letter-spacing: 0.1em; text-transform: uppercase; display: block; margin-bottom: 6px; }
+  .finput {
+    width: 100%; background: #1e1812; border: 1px solid #322619; border-radius: 8px;
+    padding: 11px 13px; color: #e8ddd0; font-size: 14px; outline: none;
+    font-family: Georgia, serif; transition: border-color 0.15s;
+    -webkit-appearance: none;
+  }
+  .finput:focus { border-color: #c4a35a77; }
+  .frow { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .cpicker { display: flex; gap: 8px; }
+  .copt {
+    flex: 1; padding: 10px 6px; border-radius: 8px;
+    border: 1px solid #322619; cursor: pointer;
+    text-align: center; font-size: 12px; background: #1e1812;
+    color: #6a5a4a; font-family: Georgia, serif; transition: all 0.15s;
+  }
+  .copt.sr { border-color: #9b2030aa; color: #c04050; background: #1f0a10; }
+  .copt.sb { border-color: #c4a245aa; color: #c4a245; background: #1e1a08; }
+  .copt.se { border-color: #c97080aa; color: #c97080; background: #1f0a14; }
+
+  .stick-btn {
+    position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
+    width: 100%; max-width: 430px; padding: 14px 20px;
+    background: #181210; border-top: 1px solid #291f18; z-index: 5;
+  }
+  .btnp {
+    width: 100%; padding: 14px; background: #c4a35a;
+    border: none; border-radius: 10px; color: #181210;
+    font-size: 15px; cursor: pointer; font-family: Georgia, serif;
+    letter-spacing: 0.05em; transition: background 0.15s;
+  }
+  .btnp:active, .btnp:hover { background: #a8893e; }
+  .btnp:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  /* ── BOTTOM SHEET ── */
+  .bkdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 20; animation: fadeIn 0.2s; }
+  .bsheet {
+    position: fixed; left: 50%; bottom: 0; transform: translateX(-50%);
+    width: 100%; max-width: 430px; background: #1e1812;
+    border-radius: 20px 20px 0 0; z-index: 21;
+    border: 1px solid #322619; border-bottom: none;
+    animation: bsUp 0.24s ease; padding-bottom: 32px;
+  }
+  @keyframes bsUp { from { transform: translateX(-50%) translateY(100%); } to { transform: translateX(-50%) translateY(0); } }
+  .bsh-handle { width: 38px; height: 4px; background: #3a2d22; border-radius: 2px; margin: 12px auto 18px; }
+  .bsh-title { padding: 0 20px 14px; font-size: 14px; color: #8a7060; letter-spacing: 0.05em; }
+  .bsh-btn {
+    display: flex; align-items: center; gap: 14px; padding: 14px 20px;
+    background: none; border: none; color: #e0d4c0; cursor: pointer;
+    width: 100%; font-family: Georgia, serif; font-size: 15px;
+    transition: background 0.15s; text-align: left;
+  }
+  .bsh-btn:active { background: #261e18; }
+  .bsh-icon {
+    width: 42px; height: 42px; border-radius: 10px;
+    background: #261e18; border: 1px solid #322619;
+    display: flex; align-items: center; justify-content: center;
+    color: #c4a35a; flex-shrink: 0;
+  }
+  .bsh-sub { font-size: 12px; color: #5a4a3a; margin-top: 2px; }
+
+  /* ── CONFIRM ── */
+  .confirm-wrap { padding: 20px; }
+  .confirm-box { background: #1e1812; border: 1px solid #322619; border-radius: 12px; padding: 20px; }
+  .confirm-t { font-size: 15px; margin-bottom: 6px; }
+  .confirm-d { font-size: 13px; color: #7a6a5a; margin-bottom: 20px; line-height: 1.5; }
+  .confirm-acts { display: flex; gap: 10px; }
+  .bghst { flex: 1; padding: 12px; border: 1px solid #322619; border-radius: 8px; background: none; color: #7a6a5a; font-family: Georgia, serif; font-size: 14px; cursor: pointer; }
+  .bdang { flex: 1; padding: 12px; border: 1px solid #7a203055; border-radius: 8px; background: #1f0a10; color: #c04050; font-family: Georgia, serif; font-size: 14px; cursor: pointer; }
+  .bdang:hover { background: #2a0c15; }
+
+  /* ── SEARCH ── */
+  .sempty { padding: 48px 20px; text-align: center; color: #3a2d22; font-size: 14px; }
+
+  /* ── SETTINGS ── */
+  .sett { padding: 20px; }
+  .sett-h { font-size: 12px; color: #c4a35a; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 10px; }
+  .sett-d { font-size: 13px; color: #6a5a4a; line-height: 1.6; margin-bottom: 14px; }
+  .sett-code {
+    background: #1a1410; border: 1px solid #322619; border-radius: 8px;
+    padding: 12px; font-family: 'Courier New', monospace; font-size: 11px;
+    color: #8a7060; overflow-x: auto; white-space: pre; max-height: 200px; overflow-y: auto;
+    margin-bottom: 14px; line-height: 1.5;
+  }
+  .sett-steps { font-size: 13px; color: #6a5a4a; line-height: 2; counter-reset: step; }
+  .sett-steps li { list-style: none; counter-increment: step; padding-left: 24px; position: relative; }
+  .sett-steps li::before { content: counter(step); position: absolute; left: 0; color: #c4a35a; font-size: 12px; top: 3px; }
+  .hr { border: none; border-top: 1px solid #291f18; margin: 24px 0; }
+
+
+  /* ── TOAST ── */
+  .toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: #1e1812; border: 1px solid #c4a35a55; border-radius: 10px;
+    padding: 11px 20px; font-size: 13px; color: #c4a35a; z-index: 60;
+    animation: fadeIn 0.2s, fadeOut 0.3s 1.7s forwards;
+    white-space: nowrap; box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  }
+
+  /* ── STATS BAR ── */
+  .stats { display: flex; gap: 0; padding: 0 20px 14px; }
+  .stat { flex: 1; text-align: center; }
+  .stat-n { font-size: 20px; color: #c4a35a; }
+  .stat-l { font-size: 10px; color: #4a3a2a; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 2px; }
+  .stat-div { width: 1px; background: #291f18; margin: 4px 0; }
+
+  /* ── ANIMATIONS ── */
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; pointer-events: none; } }
+
+  /* ── MISC ── */
+  ::-webkit-scrollbar { width: 0; height: 0; }
+  .no-bottles { padding: 40px 20px; text-align: center; color: #3a2d22; font-size: 14px; font-style: italic; }
+`;
+
+// ═══════════════════════════════════════════
+// ICONS
+// ═══════════════════════════════════════════
+const Ico = {
+  search:   <svg width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>,
+  plus:     <svg width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>,
+  info:     <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>,
+  trash:    <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>,
+  settings: <svg width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,
+  list:     <svg width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>,
+  copy:     <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>,
+};
+
+// ═══════════════════════════════════════════
+// MAIN APP
+// ═══════════════════════════════════════════
+export default function App() {
+  // ── STATE ──
+  const [bottles, setBottles]     = useState([]);
+  const [view, setView]           = useState("cave");
+  const [slot, setSlot]           = useState(null);
+  const [cave, setCave]           = useState(1);
+  const [caves, setCaves]         = useState([1]);
+  const [sheet, setSheet]         = useState(false);
+  const [bottle, setBottle]       = useState(null);
+  const [search, setSearch]       = useState("");
+  const [form, setForm]           = useState(emptyForm());
+  const [gasUrl, setGasUrl]       = useState(GAS_URL);
+  const [gasInput, setGasInput]   = useState(GAS_URL);
+  const [toast, setToast]         = useState(null);
+  const [confirm, setConfirm]     = useState(null);
+  const [loading, setLoading]     = useState(false);
+  const [navStack, setNavStack]   = useState([]);
+  const [copied, setCopied]       = useState(false);
+  const toastRef                  = useRef(null);
+
+  // ── INIT ──
+  useEffect(() => {
+    const savedUrl   = localStorage.getItem("cave_gas") || GAS_URL;
+    const savedCaves = localStorage.getItem("cave_list");
+    setGasUrl(savedUrl);
+    setGasInput(savedUrl);
+    if (savedCaves) setCaves(JSON.parse(savedCaves));
+    loadFromGas(savedUrl);
+  }, []);
+
+  // ── COMPUTED ──
+  const offset = (cave - 1) * 8;
+
+  const slotData = useMemo(() => {
+    const r = {};
+    for (let i = 1; i <= 8; i++) {
+      const sn = offset + i;
+      const bs = bottles
+        .filter(b => Number(b.rangement) === sn)
+        .sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr"));
+      r[i] = { bottles: bs, count: bs.length, colors: [...new Set(bs.map(b => b.couleur))] };
+    }
+    return r;
+  }, [bottles, offset]);
+
+  const slotBottles = useMemo(() => {
+    if (!slot) return [];
+    return bottles
+      .filter(b => Number(b.rangement) === slot)
+      .sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr"));
+  }, [bottles, slot]);
+
+  const searchResults = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (q.length < 2) return [];
+    return bottles
+      .filter(b =>
+        (b.nom || "").toLowerCase().includes(q) ||
+        (b.producteur || "").toLowerCase().includes(q) ||
+        (b.cepage || "").toLowerCase().includes(q)
+      )
+      .sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr"));
+  }, [bottles, search]);
+
+  const totalBottles = bottles.filter(b => b.rangement != null && b.rangement !== "").length;
+  const rougeCount = bottles.filter(b => b.couleur === "Rouge").length;
+  const blancCount = bottles.filter(b => b.couleur === "Blanc").length;
+  const isDemo = !gasUrl;
+
+  // ── METHODS ──
+  function showToast(msg) {
+    setToast(msg);
+    clearTimeout(toastRef.current);
+    toastRef.current = setTimeout(() => setToast(null), 2100);
+  }
+
+  function navTo(v, params = {}) {
+    setNavStack(s => [...s, view]);
+    if (params.bottle !== undefined) setBottle(params.bottle);
+    setView(v);
+  }
+
+  function goBack() {
+    const prev = navStack[navStack.length - 1] || "cave";
+    setNavStack(s => s.slice(0, -1));
+    setView(prev);
+    setConfirm(null);
+  }
+
+  function openSlot(i) {
+    setSlot(offset + i);
+    setSheet(true);
+  }
+
+  function openList() {
+    setSheet(false);
+    setView("list");
+  }
+
+  function openAdd() {
+    setSheet(false);
+    setForm(emptyForm(slot));
+    setView("add");
+  }
+
+  async function loadFromGas(url) {
+    if (!url) return;
+    setLoading(true);
+    try {
+      const r = await fetch(`${url}?action=get`);
+      const data = await r.json();
+      if (Array.isArray(data)) {
+        setBottles(data);
+        showToast("Données chargées ✓");
+      }
+    } catch {
+      showToast("Connexion impossible");
+    }
+    setLoading(false);
+  }
+
+  async function addBottle() {
+    if (!form.nom.trim()) return;
+    setLoading(true);
+    if (gasUrl) {
+      try {
+        const encoded = encodeURIComponent(JSON.stringify(form));
+        await fetch(`${gasUrl}?action=add&data=${encoded}`);
+        await loadFromGas(gasUrl);
+        showToast("Bouteille ajoutée ✓");
+        goBack();
+      } catch {
+        showToast("Erreur de connexion");
+      }
+    } else {
+      const nextRef = String(Math.max(0, ...bottles.map(b => Number(b.ref) || 0)) + 1);
+      setBottles(prev => [...prev, { ...form, ref: nextRef }]);
+      showToast("Bouteille ajoutée ✓");
+      goBack();
+    }
+    setLoading(false);
+  }
+
+  async function removeBottle(ref) {
+    setConfirm(null);
+    setLoading(true);
+    if (gasUrl) {
+      try {
+        await fetch(`${gasUrl}?action=remove&ref=${encodeURIComponent(ref)}`);
+        await loadFromGas(gasUrl);
+        showToast("Bouteille retirée ✓");
+      } catch {
+        showToast("Erreur de connexion");
+      }
+    } else {
+      setBottles(prev => prev.filter(b => b.ref !== ref));
+      showToast("Bouteille retirée ✓");
+    }
+    setLoading(false);
+  }
+
+  function addCave() {
+    const next = caves.length + 1;
+    const newC = [...caves, next];
+    setCaves(newC);
+    localStorage.setItem("cave_list", JSON.stringify(newC));
+    setCave(next);
+  }
+
+  function saveGas() {
+    localStorage.setItem("cave_gas", gasInput);
+    setGasUrl(gasInput);
+    loadFromGas(gasInput);
+  }
+
+  function copyGas() {
+    navigator.clipboard.writeText(GAS_CODE).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  function fset(k) { return e => setForm(f => ({ ...f, [k]: e.target.value })); }
+
+  // ── BOTTLE ROW COMPONENT ──
+  function BottleRow({ b, onInfo, onDel }) {
+    return (
+      <div className="brow">
+        <div className="bthumb">
+          {b.image ? <img src={b.image} alt={b.nom} /> : "🍾"}
+        </div>
+        <div className="binfo" onClick={onInfo}>
+          <div className="bname">{b.nom || "—"}</div>
+          <div className="bprod">{[b.producteur, b.annee].filter(Boolean).join(" · ")}</div>
+        </div>
+        <div className="bactions">
+          <button className="abtn" onClick={onInfo} title="Informations">{Ico.info}</button>
+          <button className="abtn del" onClick={onDel} title="Retirer">{Ico.trash}</button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── RENDER ──
+  return (
+    <div className="app">
+      <style>{CSS}</style>
+
+      {/* ══ CAVE VIEW ══ */}
+      {view === "cave" && (
+        <>
+          <div className="hdr">
+            <div>
+              <div className="hdr-title">Ma Cave</div>
+              <div className="hdr-sub">{totalBottles} bouteille{totalBottles !== 1 ? "s" : ""} rangée{totalBottles !== 1 ? "s" : ""}</div>
+            </div>
+            <div className="hdr-right">
+              <button className="ibtn" onClick={() => navTo("settings")} title="Paramètres">{Ico.settings}</button>
+            </div>
+          </div>
+
+          <div className="stats">
+            <div className="stat">
+              <div className="stat-n" style={{ color: "#9b2030" }}>{rougeCount}</div>
+              <div className="stat-l">Rouge</div>
+            </div>
+            <div className="stat-div" />
+            <div className="stat">
+              <div className="stat-n" style={{ color: "#c4a245" }}>{blancCount}</div>
+              <div className="stat-l">Blanc</div>
+            </div>
+            <div className="stat-div" />
+            <div className="stat">
+              <div className="stat-n" style={{ color: "#c97080" }}>{bottles.filter(b => b.couleur === "Rosé" || b.couleur === "Rose").length}</div>
+              <div className="stat-l">Rosé</div>
+            </div>
+            <div className="stat-div" />
+            <div className="stat">
+              <div className="stat-n">{bottles.length}</div>
+              <div className="stat-l">Total</div>
+            </div>
+          </div>
+
+          <div className="sbar">
+            <div className="sbar-inner">
+              {Ico.search}
+              <input
+                className="sbar-input"
+                placeholder="Producteur, cépage, nom..."
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                onFocus={() => { if (search.length >= 2) navTo("search"); }}
+              />
+              {search && (
+                <button style={{ background: "none", border: "none", color: "#5a4a3a", cursor: "pointer", fontSize: 18, lineHeight: 1 }}
+                  onClick={() => setSearch("")}>×</button>
+              )}
+            </div>
+          </div>
+
+          {search.length >= 2 ? (
+            <SearchList results={searchResults} onSelect={b => navTo("detail", { bottle: b })} />
+          ) : (
+            <>
+              <div className="cave-tabs">
+                {caves.map(c => (
+                  <button key={c} className={`ctab ${cave === c ? "on" : ""}`} onClick={() => setCave(c)}>
+                    Cave {c}
+                  </button>
+                ))}
+                {caves.length < 4 && (
+                  <button className="ctab add" onClick={addCave}>+ Cave</button>
+                )}
+              </div>
+
+              <div className="cave-wrap">
+                <div className="cave-frame">
+                  <div className="cave-top">
+                    <span className="cave-top-label">Cave {cave} · Cases {offset + 1}–{offset + 8}</span>
+                    <span className="cave-top-count">
+                      {Object.values(slotData).reduce((s, d) => s + d.count, 0)} / {8 * MAX}
+                    </span>
+                  </div>
+
+                  {[1, 2, 3, 4, 5, 6, 7, 8].map(i => {
+                    const d = slotData[i];
+                    const pct = Math.min(100, (d.count / MAX) * 100);
+                    const mainColor = d.colors[0] ? wc(d.colors[0]) : "#ffffff";
+                    return (
+                      <div key={i} className="slot" onClick={() => openSlot(i)}>
+                        <div className="slot-fill" style={{ width: `${pct}%`, background: mainColor }} />
+                        <div className="slot-num">{offset + i}</div>
+                        <div className="slot-body">
+                          {d.count > 0 ? (
+                            <>
+                              <div className="slot-dots">
+                                {d.colors.map(c => (
+                                  <div key={c} className="dot" style={{ background: wc(c) }} />
+                                ))}
+                              </div>
+                              <div className={`slot-count ${d.count >= MAX ? "full" : ""}`}>
+                                {d.count} / {MAX} bouteille{d.count > 1 ? "s" : ""}
+                              </div>
+                              <div className="slot-names">
+                                {d.bottles.slice(0, 2).map(b => b.nom).join(" · ")}
+                                {d.bottles.length > 2 ? " …" : ""}
+                              </div>
+                            </>
+                          ) : (
+                            <div className="slot-empty">Case vide</div>
+                          )}
+                        </div>
+                        <div className="slot-arrow">›</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      {/* ══ LIST VIEW ══ */}
+      {view === "list" && (
+        <div className="panel">
+          <div className="phdr">
+            <button className="back" onClick={goBack}>‹</button>
+            <div style={{ flex: 1 }}>
+              <div className="phdr-title">Case {slot}</div>
+              <div className="phdr-sub">{slotBottles.length} / {MAX} bouteille{slotBottles.length !== 1 ? "s" : ""}</div>
+            </div>
+            {slotBottles.length < MAX && (
+              <button className="ibtn" onClick={() => { setForm(emptyForm(slot)); setView("add"); }}>{Ico.plus}</button>
+            )}
+          </div>
+
+          {confirm ? (
+            <div className="confirm-wrap">
+              <div className="confirm-box">
+                <div className="confirm-t">Retirer cette bouteille ?</div>
+                <div className="confirm-d">
+                  <strong>{confirm.nom}</strong>{confirm.producteur ? ` — ${confirm.producteur}` : ""}
+                  {confirm.annee ? ` (${confirm.annee})` : ""}
+                </div>
+                <div className="confirm-acts">
+                  <button className="bghst" onClick={() => setConfirm(null)}>Annuler</button>
+                  <button className="bdang" onClick={() => removeBottle(confirm.ref)}>Retirer</button>
+                </div>
+              </div>
+            </div>
+          ) : slotBottles.length === 0 ? (
+            <div className="no-bottles">Aucune bouteille dans cette case</div>
+          ) : (
+            slotBottles.map(b => (
+              <BottleRow key={b.ref} b={b}
+                onInfo={() => navTo("detail", { bottle: b })}
+                onDel={() => setConfirm(b)} />
+            ))
+          )}
+        </div>
+      )}
+
+      {/* ══ DETAIL VIEW ══ */}
+      {view === "detail" && bottle && (
+        <div className="panel">
+          <div className="phdr">
+            <button className="back" onClick={goBack}>‹</button>
+            <div className="phdr-title">Fiche bouteille</div>
+          </div>
+          <div className="det">
+            <div className="det-hero">
+              <div className="det-img">
+                {bottle.image
+                  ? <img src={bottle.image} alt={bottle.nom} onError={e => { e.target.style.display = "none"; }} />
+                  : "🍾"}
+              </div>
+              <div style={{ flex: 1 }}>
+                <div className="det-name">{bottle.nom || "—"}</div>
+                <div className="det-prod">{bottle.producteur || ""}</div>
+                {bottle.couleur && (
+                  <div style={{ marginTop: 10 }}>
+                    <span className="badge" style={{
+                      background: wc(bottle.couleur) + "22",
+                      color: wc(bottle.couleur),
+                      border: `1px solid ${wc(bottle.couleur)}44`,
+                    }}>
+                      <span style={{ width: 8, height: 8, borderRadius: "50%", background: wc(bottle.couleur), display: "inline-block" }} />
+                      {bottle.couleur}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div>
+              {[
+                ["Millésime",   bottle.annee],
+                ["Région",      bottle.region],
+                ["Appellation", bottle.appellation],
+                ["Sous-région", bottle.sousRegion],
+                ["Cépage",      bottle.cepage],
+                ["Case",        bottle.rangement ? `Case ${bottle.rangement}` : null],
+                ["Emplacement", bottle.emplacement],
+                ["Date d'achat", bottle.dateAchat],
+                ["Prix",        bottle.prixAchat],
+                ["Lieu d'achat", bottle.lieuAchat],
+                ["Boire dès",   bottle.boireDes],
+                ["Boire jusque", bottle.boireJusque],
+              ].filter(([, v]) => v).map(([l, v]) => (
+                <div key={l} className="irow">
+                  <div className="ilabel">{l}</div>
+                  <div className="ivalue">{v}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══ ADD BOTTLE ══ */}
+      {view === "add" && (
+        <div className="panel">
+          <div className="phdr">
+            <button className="back" onClick={goBack}>‹</button>
+            <div className="phdr-title">Ajouter une bouteille</div>
+          </div>
+          <div className="aform">
+            <div>
+              <label className="flabel">Nom *</label>
+              <input className="finput" value={form.nom} onChange={fset("nom")} placeholder="Ex : Château Pétrus" />
+            </div>
+            <div>
+              <label className="flabel">Producteur</label>
+              <input className="finput" value={form.producteur} onChange={fset("producteur")} placeholder="Ex : Domaine Mayard" />
+            </div>
+            <div>
+              <label className="flabel">Couleur</label>
+              <div className="cpicker">
+                {["Rouge", "Blanc", "Rosé"].map(c => (
+                  <button key={c}
+                    className={`copt ${form.couleur === c ? "s" + c.toLowerCase().replace("é", "e")[0] : ""}`}
+                    style={form.couleur === c ? {
+                      borderColor: wc(c) + "cc",
+                      color: wc(c),
+                      background: wc(c) + "18",
+                    } : {}}
+                    onClick={() => setForm(f => ({ ...f, couleur: c }))}>
+                    {c}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="frow">
+              <div>
+                <label className="flabel">Millésime</label>
+                <input className="finput" type="number" value={form.annee} onChange={fset("annee")} placeholder="2022" min="1900" max="2030" />
+              </div>
+              <div>
+                <label className="flabel">Case</label>
+                <input className="finput" type="number" value={form.rangement} onChange={fset("rangement")} placeholder={String(slot || "")} min="1" />
+              </div>
+            </div>
+            <div>
+              <label className="flabel">Région</label>
+              <input className="finput" value={form.region} onChange={fset("region")} placeholder="Ex : Rhône" />
+            </div>
+            <div>
+              <label className="flabel">Appellation</label>
+              <input className="finput" value={form.appellation} onChange={fset("appellation")} placeholder="Ex : Châteauneuf-du-Pape" />
+            </div>
+            <div>
+              <label className="flabel">Sous-région</label>
+              <input className="finput" value={form.sousRegion} onChange={fset("sousRegion")} placeholder="Ex : Vaucluse" />
+            </div>
+            <div>
+              <label className="flabel">Cépage</label>
+              <input className="finput" value={form.cepage} onChange={fset("cepage")} placeholder="Ex : Grenache, Syrah" />
+            </div>
+            <div className="frow">
+              <div>
+                <label className="flabel">Date d'achat</label>
+                <input className="finput" type="date" value={form.dateAchat} onChange={fset("dateAchat")} />
+              </div>
+              <div>
+                <label className="flabel">Prix</label>
+                <input className="finput" value={form.prixAchat} onChange={fset("prixAchat")} placeholder="Ex : 35,00 €" />
+              </div>
+            </div>
+            <div>
+              <label className="flabel">Lieu d'achat</label>
+              <input className="finput" value={form.lieuAchat} onChange={fset("lieuAchat")} placeholder="Ex : Mr Vin" />
+            </div>
+            <div className="frow">
+              <div>
+                <label className="flabel">Boire dès</label>
+                <input className="finput" type="date" value={form.boireDes} onChange={fset("boireDes")} />
+              </div>
+              <div>
+                <label className="flabel">Boire jusque</label>
+                <input className="finput" type="date" value={form.boireJusque} onChange={fset("boireJusque")} />
+              </div>
+            </div>
+            <div>
+              <label className="flabel">Image (URL)</label>
+              <input className="finput" value={form.image} onChange={fset("image")} placeholder="https://..." />
+            </div>
+            <div>
+              <label className="flabel">Emplacement précis</label>
+              <input className="finput" value={form.emplacement} onChange={fset("emplacement")} placeholder="Position dans la case (optionnel)" />
+            </div>
+          </div>
+          <div className="stick-btn">
+            <button className="btnp" onClick={addBottle} disabled={!form.nom.trim() || loading}>
+              {loading ? "Enregistrement…" : "Ajouter la bouteille"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ══ SEARCH VIEW ══ */}
+      {view === "search" && (
+        <div className="panel">
+          <div className="phdr">
+            <button className="back" onClick={goBack}>‹</button>
+            <div style={{ flex: 1, paddingRight: 4 }}>
+              <input className="finput" autoFocus
+                style={{ padding: "9px 13px" }}
+                placeholder="Producteur, cépage, nom…"
+                value={search}
+                onChange={e => setSearch(e.target.value)} />
+            </div>
+          </div>
+          <SearchList results={searchResults} onSelect={b => navTo("detail", { bottle: b })} />
+        </div>
+      )}
+
+      {/* ══ SETTINGS ══ */}
+      {view === "settings" && (
+        <div className="panel">
+          <div className="phdr">
+            <button className="back" onClick={goBack}>‹</button>
+            <div className="phdr-title">Paramètres</div>
+          </div>
+          <div className="sett">
+            <div className="sett-h">Connexion Google Sheets</div>
+            <div className="sett-d">
+              {gasUrl
+                ? "✓ Connecté à votre Google Sheet."
+                : "Suivez les étapes ci-dessous pour synchroniser l'application avec votre fichier Google Sheets."}
+            </div>
+
+            <div className="sett-h" style={{ marginTop: 20, marginBottom: 12 }}>Étape 1 — Déployez le script</div>
+            <ol className="sett-steps">
+              <li>Ouvrez votre Google Sheet → menu <em>Extensions</em> → <em>Apps Script</em></li>
+              <li>Supprimez le code existant et collez le code ci-dessous</li>
+              <li>Cliquez <em>Déployer</em> → <em>Nouveau déploiement</em></li>
+              <li>Type : <em>Application Web</em> — Accès : <em>Tout le monde</em></li>
+              <li>Autorisez et copiez l'URL générée</li>
+            </ol>
+
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 16, marginBottom: 8 }}>
+              <span className="sett-h" style={{ margin: 0 }}>Code Google Apps Script</span>
+              <button className="ibtn" style={{ fontSize: 12, gap: 5, display: "flex", alignItems: "center", color: copied ? "#c4a35a" : "#7a6050" }} onClick={copyGas}>
+                {Ico.copy} {copied ? "Copié !" : "Copier"}
+              </button>
+            </div>
+            <div className="sett-code">{GAS_CODE}</div>
+
+            <div className="sett-h" style={{ marginTop: 20 }}>Étape 2 — Collez l'URL ici</div>
+            <input className="finput" value={gasInput} onChange={e => setGasInput(e.target.value)}
+              placeholder="https://script.google.com/macros/s/…" style={{ marginBottom: 12 }} />
+            <button className="btnp" onClick={saveGas} style={{ marginBottom: 0 }}>
+              {loading ? "Connexion…" : "Enregistrer et synchroniser"}
+            </button>
+
+            <hr className="hr" />
+
+            <div className="sett-h">État</div>
+            <div className="sett-d">
+              {isDemo
+                ? "Mode démo — les données ne sont pas synchronisées avec Google Sheets."
+                : `Connecté. ${bottles.length} bouteille${bottles.length > 1 ? "s" : ""} chargée${bottles.length > 1 ? "s" : ""}.`}
+            </div>
+            {gasUrl && (
+              <button className="bghst" style={{ marginTop: 8, width: "100%" }} onClick={() => loadFromGas(gasUrl)}>
+                Synchroniser maintenant
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ══ BOTTOM SHEET ══ */}
+      {sheet && (
+        <>
+          <div className="bkdrop" onClick={() => setSheet(false)} />
+          <div className="bsheet">
+            <div className="bsh-handle" />
+            <div className="bsh-title">
+              Case {slot} · {slotData[((slot - 1) % 8) + 1]?.count || 0} / {MAX} bouteilles
+            </div>
+            <button className="bsh-btn" onClick={openList}>
+              <div className="bsh-icon">{Ico.list}</div>
+              <div>
+                <div>Voir les bouteilles</div>
+                <div className="bsh-sub">{slotData[((slot - 1) % 8) + 1]?.count || 0} bouteille{(slotData[((slot - 1) % 8) + 1]?.count || 0) !== 1 ? "s" : ""} dans cette case</div>
+              </div>
+            </button>
+            {(slotData[((slot - 1) % 8) + 1]?.count || 0) < MAX && (
+              <button className="bsh-btn" onClick={openAdd}>
+                <div className="bsh-icon">{Ico.plus}</div>
+                <div>
+                  <div>Ajouter une bouteille</div>
+                  <div className="bsh-sub">{MAX - (slotData[((slot - 1) % 8) + 1]?.count || 0)} emplacement{MAX - (slotData[((slot - 1) % 8) + 1]?.count || 0) > 1 ? "s" : ""} libre{MAX - (slotData[((slot - 1) % 8) + 1]?.count || 0) > 1 ? "s" : ""}</div>
+                </div>
+              </button>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* ══ TOAST ══ */}
+      {toast && <div className="toast" key={toast + Date.now()}>{toast}</div>}
+
+
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+// SEARCH RESULTS LIST
+// ═══════════════════════════════════════════
+function SearchList({ results, onSelect }) {
+  return (
+    <div>
+      {results.length === 0 ? (
+        <div className="sempty">Tapez au moins 2 caractères pour rechercher</div>
+      ) : results.map(b => (
+        <div key={b.ref} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 20px", borderBottom: "1px solid #1c1610", cursor: "pointer" }}
+          onClick={() => onSelect(b)}>
+          <div style={{ width: 44, height: 44, borderRadius: 8, background: "#1e1812", border: "1px solid #322619", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, flexShrink: 0 }}>
+            {b.image ? <img src={b.image} alt={b.nom} style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 8 }} /> : "🍾"}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 14, color: "#e0d4c0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.nom}</div>
+            <div style={{ fontSize: 12, color: "#6a5a4a", marginTop: 2 }}>
+              {[b.producteur, b.annee, b.rangement ? `Case ${b.rangement}` : null].filter(Boolean).join(" · ")}
+            </div>
+          </div>
+          <div style={{ color: "#3a2d22", fontSize: 18 }}>›</div>
+        </div>
+      ))}
+    </div>
+  );
+}
