@@ -554,37 +554,15 @@ const CSS = `
   /* ══ TABLET (≥600px) ══════════════════════════════════════════ */
   @media (min-width: 600px) {
     :root {
-      --app-w: min(100%, 720px);
+      --app-w: min(100%, 520px);
     }
-    .cave-frame .slot { cursor: pointer; }
-    .cave-frame .slot:hover { background: #1e1812; }
-    /* Cave grid: 2 columns on tablet */
-    .cave-frame { display: grid; grid-template-columns: 1fr 1fr; }
-    .cave-frame .cave-top { grid-column: 1 / -1; display: flex; }
-    .slot:nth-child(odd)  { border-right: 1px solid #1a1410; }
-    .slot:nth-last-child(-n+2) { border-bottom: none; }
   }
 
   /* ══ DESKTOP (≥900px) ═════════════════════════════════════════ */
   @media (min-width: 900px) {
     :root {
-      --app-w: min(100%, 860px);
+      --app-w: min(100%, 560px);
     }
-    /* Split layout: cave on left, content panel on right */
-    .app { display: grid; grid-template-columns: 340px 1fr; grid-template-rows: auto 1fr; min-height: 100vh; }
-    .hdr { grid-column: 1 / -1; }
-    .stats { grid-column: 1; padding-top: 12px; }
-    .sbar { grid-column: 1; }
-    .cave-tabs { grid-column: 1; }
-    .cave-wrap { grid-column: 1; grid-row: span 3; }
-    /* Panel becomes a sidebar on desktop */
-    .panel {
-      position: static; transform: none; left: auto;
-      width: 100%; border-left: 1px solid #291f18;
-      animation: none; overflow-y: auto;
-    }
-    .stick-btn { position: sticky; }
-    .bsheet { max-width: 860px; }
   }
 `;
 
