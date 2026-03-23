@@ -685,6 +685,7 @@ const Ico = {
   list:     <svg width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>,
   copy:     <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>,
   euro:     <svg width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M4 10h12M4 14h12"/><path d="M19 6a7 7 0 1 0 0 12"/></svg>,
+  edit:     <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
   moon:     <svg width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>,
   sun:      <svg width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>,
 };
@@ -711,6 +712,9 @@ function App() {
   const [navStack, setNavStack]   = useState([]);
   const [copied, setCopied]       = useState(false);
   const [showValeur, setShowValeur] = useState(false);
+  const [editRef, setEditRef]         = useState(null);
+  const [editForm, setEditForm]       = useState(null);
+  const [allFilter, setAllFilter]     = useState("");
   const [theme, setTheme]           = useState(() => localStorage.getItem('cave_theme') || 'dark');
   const toastRef                  = useRef(null);
 
@@ -866,6 +870,35 @@ function App() {
     setLoading(false);
   }
 
+  function openEdit(b) {
+    setEditRef(b.ref);
+    setEditForm({ ...b });
+    navTo("edit");
+  }
+
+  function efset(k) { return e => setEditForm(f => ({ ...f, [k]: e.target.value })); }
+
+  async function saveEdit() {
+    if (!editForm || !editForm.nom.trim()) return;
+    setLoading(true);
+    if (gasUrl) {
+      try {
+        // remove old row, add new one with same ref
+        await fetch(`${gasUrl}?action=remove&ref=${encodeURIComponent(editRef)}`);
+        const encoded = encodeURIComponent(JSON.stringify({ ...editForm, ref: editRef }));
+        await fetch(`${gasUrl}?action=add&data=${encoded}`);
+        await loadFromGas(gasUrl);
+        showToast("Bouteille modifiée ✓");
+        goBack();
+      } catch { showToast("Erreur de connexion"); }
+    } else {
+      setBottles(prev => prev.map(b => b.ref === editRef ? { ...editForm, ref: editRef } : b));
+      showToast("Bouteille modifiée ✓");
+      goBack();
+    }
+    setLoading(false);
+  }
+
   function addCave() {
     const next = caves.length + 1;
     const newC = [...caves, next];
@@ -954,7 +987,7 @@ function App() {
             <div className="hdr-right">
               <button className="ibtn" onClick={() => setShowValeur(true)} title="Valeur de la cave">{Ico.euro}</button>
               <button className="ibtn" onClick={toggleTheme} title="Changer le thème">{theme === 'dark' ? Ico.sun : Ico.moon}</button>
-              <button className="ibtn" onClick={() => navTo("settings")} title="Paramètres">{Ico.settings}</button>
+              <button className="ibtn" onClick={() => navTo("allwines")} title="Tous les vins">{Ico.list}</button>
             </div>
           </div>
 
@@ -1295,6 +1328,187 @@ function App() {
       )}
 
       {/* ══ SETTINGS ══ */}
+      {/* ══ ALL WINES VIEW ══ */}
+      {view === "allwines" && (() => {
+        const q = allFilter.trim().toLowerCase();
+        const filtered = [...bottles]
+          .filter(b => !q ||
+            (b.nom || "").toLowerCase().includes(q) ||
+            (b.producteur || "").toLowerCase().includes(q) ||
+            (b.cepage || "").toLowerCase().includes(q) ||
+            (b.region || "").toLowerCase().includes(q) ||
+            (b.appellation || "").toLowerCase().includes(q)
+          )
+          .sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr"));
+        return (
+          <div className="panel">
+            <div className="phdr">
+              <button className="back" onClick={goBack}>‹</button>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="phdr-title">Tous les vins</div>
+                <div className="phdr-sub">{bottles.length} bouteille{bottles.length > 1 ? "s" : ""}</div>
+              </div>
+              <button className="ibtn" onClick={() => navTo("settings")} title="Paramètres">{Ico.settings}</button>
+            </div>
+            <div className="sbar" style={{ paddingBottom: 8 }}>
+              <div className="sbar-inner">
+                {Ico.search}
+                <input className="sbar-input" placeholder="Filtrer…" value={allFilter}
+                  onChange={e => setAllFilter(e.target.value)} />
+                {allFilter && (
+                  <button style={{ background:"none",border:"none",color:"#5a4a3a",cursor:"pointer",fontSize:18,lineHeight:1 }}
+                    onClick={() => setAllFilter("")}>×</button>
+                )}
+              </div>
+            </div>
+            {filtered.length === 0 ? (
+              <div className="no-bottles">Aucun résultat</div>
+            ) : filtered.map(b => (
+              <div key={b.ref} className="brow">
+                <div className="bthumb">
+                  {b.image ? <img src={b.image} alt={b.nom} /> : "🍾"}
+                  <span className="bthumb-dot" style={{ background: wc(b.couleur) }} />
+                </div>
+                <div className="binfo" onClick={() => navTo("detail", { bottle: b })}>
+                  <span className="bname">
+                    {b.nom || "—"}
+                    {isReady(b) && (
+                      <span className="ready-badge" style={{ marginLeft: 6 }} title={"À boire dès " + b.boireDes}>
+                        <svg width="9" height="9" viewBox="0 0 12 12" fill="none">
+                          <path d="M2 6l3 3 5-5" stroke="#4caf50" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                        À boire
+                      </span>
+                    )}
+                  </span>
+                  <span className="bprod">
+                    {b.producteur || ""}{b.producteur && b.annee ? <span className="bannee"> · {b.annee}</span> : b.annee ? <span className="bannee">{b.annee}</span> : null}
+                    {b.rangement ? <span className="bannee"> · Case {b.rangement}</span> : null}
+                  </span>
+                </div>
+                <div className="bactions">
+                  <button className="abtn" onClick={() => openEdit(b)} title="Modifier">{Ico.edit}</button>
+                  <button className="abtn del" onClick={() => setConfirm(b)} title="Retirer">{Ico.trash}</button>
+                </div>
+              </div>
+            ))}
+            {confirm && (
+              <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:30,display:"flex",alignItems:"flex-end",justifyContent:"center" }}
+                onClick={() => setConfirm(null)}>
+                <div style={{ background:"#1e1812",border:"1px solid #322619",borderRadius:"16px 16px 0 0",padding:20,width:"100%",maxWidth:560 }}
+                  onClick={e => e.stopPropagation()}>
+                  <div className="confirm-t">Retirer cette bouteille ?</div>
+                  <div className="confirm-d" style={{ marginTop:6 }}>
+                    <strong>{confirm.nom}</strong>{confirm.producteur ? ` — ${confirm.producteur}` : ""}
+                    {confirm.annee ? ` (${confirm.annee})` : ""}
+                  </div>
+                  <div className="confirm-acts" style={{ marginTop:16 }}>
+                    <button className="bghst" onClick={() => setConfirm(null)}>Annuler</button>
+                    <button className="bdang" onClick={() => removeBottle(confirm.ref)}>Retirer</button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* ══ EDIT BOTTLE VIEW ══ */}
+      {view === "edit" && editForm && (
+        <div className="panel">
+          <div className="phdr">
+            <button className="back" onClick={goBack}>‹</button>
+            <div className="phdr-title">Modifier la bouteille</div>
+          </div>
+          <div className="aform">
+            <div>
+              <label className="flabel">Nom *</label>
+              <input className="finput" value={editForm.nom || ""} onChange={efset("nom")} placeholder="Ex : Château Pétrus" />
+            </div>
+            <div>
+              <label className="flabel">Producteur</label>
+              <input className="finput" value={editForm.producteur || ""} onChange={efset("producteur")} />
+            </div>
+            <div>
+              <label className="flabel">Couleur</label>
+              <div className="cpicker">
+                {["Rouge", "Blanc", "Rosé"].map(c => (
+                  <button key={c}
+                    className={`copt ${editForm.couleur === c ? "s" + c.toLowerCase().replace("é","e")[0] : ""}`}
+                    style={editForm.couleur === c ? { borderColor: wc(c)+"cc", color: wc(c), background: wc(c)+"18" } : {}}
+                    onClick={() => setEditForm(f => ({ ...f, couleur: c }))}>
+                    {c}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="frow">
+              <div>
+                <label className="flabel">Millésime</label>
+                <input className="finput" type="number" value={editForm.annee || ""} onChange={efset("annee")} placeholder="2022" />
+              </div>
+              <div>
+                <label className="flabel">Case</label>
+                <input className="finput" type="number" value={editForm.rangement || ""} onChange={efset("rangement")} min="1" />
+              </div>
+            </div>
+            <div>
+              <label className="flabel">Région</label>
+              <input className="finput" value={editForm.region || ""} onChange={efset("region")} />
+            </div>
+            <div>
+              <label className="flabel">Appellation</label>
+              <input className="finput" value={editForm.appellation || ""} onChange={efset("appellation")} />
+            </div>
+            <div>
+              <label className="flabel">Sous-région</label>
+              <input className="finput" value={editForm.sousRegion || ""} onChange={efset("sousRegion")} />
+            </div>
+            <div>
+              <label className="flabel">Cépage</label>
+              <input className="finput" value={editForm.cepage || ""} onChange={efset("cepage")} />
+            </div>
+            <div className="frow">
+              <div>
+                <label className="flabel">Date d'achat</label>
+                <input className="finput" type="date" value={editForm.dateAchat || ""} onChange={efset("dateAchat")} />
+              </div>
+              <div>
+                <label className="flabel">Prix</label>
+                <input className="finput" value={editForm.prixAchat || ""} onChange={efset("prixAchat")} placeholder="35,00 €" />
+              </div>
+            </div>
+            <div>
+              <label className="flabel">Lieu d'achat</label>
+              <input className="finput" value={editForm.lieuAchat || ""} onChange={efset("lieuAchat")} />
+            </div>
+            <div className="frow">
+              <div>
+                <label className="flabel">Boire dès</label>
+                <input className="finput" type="date" value={editForm.boireDes || ""} onChange={efset("boireDes")} />
+              </div>
+              <div>
+                <label className="flabel">Boire jusque</label>
+                <input className="finput" type="date" value={editForm.boireJusque || ""} onChange={efset("boireJusque")} />
+              </div>
+            </div>
+            <div>
+              <label className="flabel">Image (URL)</label>
+              <input className="finput" value={editForm.image || ""} onChange={efset("image")} placeholder="https://..." />
+            </div>
+            <div>
+              <label className="flabel">Emplacement précis</label>
+              <input className="finput" value={editForm.emplacement || ""} onChange={efset("emplacement")} />
+            </div>
+          </div>
+          <div className="stick-btn">
+            <button className="btnp" onClick={saveEdit} disabled={!editForm.nom || !editForm.nom.trim() || loading}>
+              {loading ? "Enregistrement…" : "Enregistrer les modifications"}
+            </button>
+          </div>
+        </div>
+      )}
+
       {view === "settings" && (
         <div className="panel">
           <div className="phdr">
