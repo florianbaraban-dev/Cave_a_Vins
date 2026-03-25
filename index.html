@@ -32,7 +32,6 @@ const WINE = {
   Rouge: { dot: "#9b2030", light: "#c0283f" },
   Blanc: { dot: "#c4a245", light: "#d4b85a" },
   "Rosé":  { dot: "#c97080", light: "#d98090" },
-  "Rosé": { dot: "#c97080", light: "#d98090" },
   Rose:  { dot: "#c97080", light: "#d98090" },
 };
 const wc = c => (WINE[c] || WINE.Rouge).dot;
@@ -52,7 +51,6 @@ function isReady(b) {
   const parts = b.boireDes.split('/');
   let d;
   if (parts.length === 3) {
-    // DD/MM/YYYY
     d = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
   } else {
     d = new Date(b.boireDes);
@@ -74,8 +72,6 @@ const GAS_CODE = `// ───────────────────�
 const SHEET_ID   = '1z0UvtYSB7zvOSpdo-YPB2eBNi9FKKbYO-a2RcEp-dQ8';
 const SHEET_NAME = 'Ma Cave';
 
-// Correspondance en-têtes normalisés → clés JSON
-// Les en-têtes sont normalisés : retours à la ligne remplacés par espace, trim
 const COL_MAP = {
   'ref':          'ref',
   'rangement':    'rangement',
@@ -85,7 +81,6 @@ const COL_MAP = {
   'producteur':   'producteur',
   'nom':          'nom',
   'couleur':      'couleur',
-  'annee':        'annee',
   'annee':        'annee',
   'region':       'region',
   'appellation':  'appellation',
@@ -97,7 +92,6 @@ const COL_MAP = {
   'image':        'image',
 };
 
-// Normalise un en-tête : retire accents pour comparaison, minuscules, trim, \n→espace
 function normHdr(h) {
   return h.toString()
     .replace(/\r?\n/g, ' ')
@@ -145,7 +139,6 @@ function doGet(e) {
   const all  = s.getDataRange().getValues();
   const rawHdrs = all[0];
 
-  // Build index map using normalized headers
   const idx = {};
   rawHdrs.forEach((h, i) => {
     const norm = normHdr(h);
@@ -156,23 +149,16 @@ function doGet(e) {
     return idx[key] !== undefined ? row[idx[key]] : '';
   }
 
-  // ── DEBUG : voir les en-têtes bruts et normalisés ─────────
   if (action === 'debug') {
-    return json({
-      raw: rawHdrs.map(String),
-      normalized: rawHdrs.map(normHdr),
-      idx: idx
-    });
+    return json({ raw: rawHdrs.map(String), normalized: rawHdrs.map(normHdr), idx: idx });
   }
 
-  // ── LECTURE ──────────────────────────────────────────────
   if (action === 'get') {
     const refIdx = idx['ref'] !== undefined ? idx['ref'] : 0;
     const rows   = all.slice(1).filter(r => r[refIdx] !== '' && r[refIdx] !== null && r[refIdx] !== undefined);
     const data   = rows.map(r => ({
       ref:         String(cell(r,'ref')         || ''),
-      rangement:   cell(r,'rangement') !== '' && cell(r,'rangement') !== null
-                     ? Number(cell(r,'rangement')) : null,
+      rangement:   cell(r,'rangement') !== '' && cell(r,'rangement') !== null ? Number(cell(r,'rangement')) : null,
       dateAchat:   fmtDate(cell(r,'dateAchat')),
       prixAchat:   fmtPrice(cell(r,'prixAchat')),
       lieuAchat:   String(cell(r,'lieuAchat')   || ''),
@@ -192,14 +178,12 @@ function doGet(e) {
     return json(data);
   }
 
-  // ── AJOUT ────────────────────────────────────────────────
   if (action === 'add') {
     const b       = JSON.parse(decodeURIComponent(e.parameter.data || '{}'));
     const refIdx  = idx['ref'] !== undefined ? idx['ref'] : 0;
     const refs    = all.slice(1).map(r => Number(r[refIdx]) || 0);
     const nextRef = Math.max(0, ...refs) + 1;
     const row     = new Array(rawHdrs.length).fill('');
-    // Fill each cell using normalized header matching
     rawHdrs.forEach((h, i) => {
       const norm = normHdr(h);
       const key  = COL_MAP[norm];
@@ -210,7 +194,6 @@ function doGet(e) {
     return json({ ok: true, ref: nextRef });
   }
 
-  // ── RETRAIT ──────────────────────────────────────────────
   if (action === 'remove') {
     const ref    = String(e.parameter.ref || '');
     const refIdx = idx['ref'] !== undefined ? idx['ref'] : 0;
@@ -314,6 +297,26 @@ const CSS = `
     flex: 1; font-family: Georgia, serif;
   }
   .sbar-input::placeholder { color: #4a3a2a; }
+
+  /* ── FILTER CHIPS ── */
+  .fchips {
+    display: flex; gap: 8px;
+    padding: 0 var(--pad) clamp(10px, 2vw, 16px);
+    overflow-x: auto; scrollbar-width: none;
+  }
+  .fchips::-webkit-scrollbar { display: none; }
+  .fchip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: clamp(5px,1.2vw,7px) clamp(12px,2.5vw,16px);
+    border-radius: 20px; font-size: var(--fs-sm);
+    border: 1px solid #3a2d22; cursor: pointer; white-space: nowrap;
+    background: none; color: #7a6a5a; font-family: Georgia, serif;
+    transition: all 0.18s; flex-shrink: 0;
+  }
+  .fchip:active { opacity: 0.75; }
+  .fchip-on { border-color: #c4a35a88; color: #c4a35a; background: rgba(196,163,90,0.1); }
+  .fchip-ready-on { border-color: rgba(76,175,80,0.5); color: #4caf50; background: rgba(76,175,80,0.1); }
+  .fchip-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 
   /* ── CAVE FRAME ── */
   .cave-wrap { padding: 0 var(--pad) clamp(16px,3vw,28px); }
@@ -659,19 +662,18 @@ const CSS = `
   .app.light .no-bottles { color: var(--c-text3); }
   .app.light .sempty { color: var(--c-text3); }
   .app.light .ready-badge { background: #e8f5e9; color: #2e7d32; border-color: #a5d6a7; }
+  .app.light .fchip { border-color: var(--c-border); color: var(--c-text2); }
+  .app.light .fchip-on { border-color: var(--c-gold); color: var(--c-gold); background: rgba(139,105,20,0.08); }
+  .app.light .fchip-ready-on { border-color: #a5d6a7; color: #2e7d32; background: #e8f5e9; }
 
   /* ══ TABLET (≥600px) ══════════════════════════════════════════ */
   @media (min-width: 600px) {
-    :root {
-      --app-w: min(100%, 520px);
-    }
+    :root { --app-w: min(100%, 520px); }
   }
 
   /* ══ DESKTOP (≥900px) ═════════════════════════════════════════ */
   @media (min-width: 900px) {
-    :root {
-      --app-w: min(100%, 560px);
-    }
+    :root { --app-w: min(100%, 560px); }
   }
 `;
 
@@ -715,6 +717,8 @@ function App() {
   const [editRef, setEditRef]         = useState(null);
   const [editForm, setEditForm]       = useState(null);
   const [allFilter, setAllFilter]     = useState("");
+  const [allColorFilter, setAllColorFilter] = useState("");
+  const [allReadyFilter, setAllReadyFilter] = useState(false);
   const [theme, setTheme]           = useState(() => localStorage.getItem('cave_theme') || 'dark');
   const toastRef                  = useRef(null);
 
@@ -883,7 +887,6 @@ function App() {
     setLoading(true);
     if (gasUrl) {
       try {
-        // remove old row, add new one with same ref
         await fetch(`${gasUrl}?action=remove&ref=${encodeURIComponent(editRef)}`);
         const encoded = encodeURIComponent(JSON.stringify({ ...editForm, ref: editRef }));
         await fetch(`${gasUrl}?action=add&data=${encoded}`);
@@ -908,7 +911,6 @@ function App() {
   }
 
   function deleteCave(c) {
-    // Check if cave has bottles
     const offset = (c - 1) * 8;
     const hasBtl = bottles.some(b => {
       const r = Number(b.rangement);
@@ -1327,29 +1329,43 @@ function App() {
         </div>
       )}
 
-      {/* ══ SETTINGS ══ */}
       {/* ══ ALL WINES VIEW ══ */}
       {view === "allwines" && (() => {
         const q = allFilter.trim().toLowerCase();
         const filtered = [...bottles]
-          .filter(b => !q ||
-            (b.nom || "").toLowerCase().includes(q) ||
-            (b.producteur || "").toLowerCase().includes(q) ||
-            (b.cepage || "").toLowerCase().includes(q) ||
-            (b.region || "").toLowerCase().includes(q) ||
-            (b.appellation || "").toLowerCase().includes(q)
-          )
+          .filter(b => {
+            const matchText = !q ||
+              (b.nom || "").toLowerCase().includes(q) ||
+              (b.producteur || "").toLowerCase().includes(q) ||
+              (b.cepage || "").toLowerCase().includes(q) ||
+              (b.region || "").toLowerCase().includes(q) ||
+              (b.appellation || "").toLowerCase().includes(q);
+            const matchColor = !allColorFilter ||
+              b.couleur === allColorFilter ||
+              (allColorFilter === "Rosé" && (b.couleur === "Rose" || b.couleur === "Rosé"));
+            const matchReady = !allReadyFilter || isReady(b);
+            return matchText && matchColor && matchReady;
+          })
           .sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr"));
+
+        const activeFiltersCount = (allColorFilter ? 1 : 0) + (allReadyFilter ? 1 : 0);
+
         return (
           <div className="panel">
             <div className="phdr">
               <button className="back" onClick={goBack}>‹</button>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div className="phdr-title">Tous les vins</div>
-                <div className="phdr-sub">{bottles.length} bouteille{bottles.length > 1 ? "s" : ""}</div>
+                <div className="phdr-sub">
+                  {filtered.length !== bottles.length
+                    ? `${filtered.length} / ${bottles.length} bouteille${bottles.length > 1 ? "s" : ""}`
+                    : `${bottles.length} bouteille${bottles.length > 1 ? "s" : ""}`}
+                </div>
               </div>
               <button className="ibtn" onClick={() => navTo("settings")} title="Paramètres">{Ico.settings}</button>
             </div>
+
+            {/* Search bar */}
             <div className="sbar" style={{ paddingBottom: 8 }}>
               <div className="sbar-inner">
                 {Ico.search}
@@ -1361,8 +1377,52 @@ function App() {
                 )}
               </div>
             </div>
+
+            {/* Filter chips */}
+            <div className="fchips">
+              <button
+                className={`fchip ${allReadyFilter ? "fchip-ready-on" : ""}`}
+                onClick={() => setAllReadyFilter(v => !v)}>
+                <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+                  <path d="M2 6l3 3 5-5"
+                    stroke={allReadyFilter ? "#4caf50" : "currentColor"}
+                    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+                À boire
+              </button>
+              {[
+                { label: "Rouge", color: "#9b2030" },
+                { label: "Blanc", color: "#c4a245" },
+                { label: "Rosé",  color: "#c97080" },
+              ].map(({ label, color }) => (
+                <button
+                  key={label}
+                  className={`fchip ${allColorFilter === label ? "fchip-on" : ""}`}
+                  style={allColorFilter === label
+                    ? { borderColor: color + "cc", color: color, background: color + "1a" }
+                    : {}}
+                  onClick={() => setAllColorFilter(v => v === label ? "" : label)}>
+                  <span className="fchip-dot" style={{ background: color }} />
+                  {label}
+                </button>
+              ))}
+              {(allColorFilter || allReadyFilter) && (
+                <button
+                  className="fchip"
+                  style={{ color: "#5a4a3a", borderStyle: "dashed" }}
+                  onClick={() => { setAllColorFilter(""); setAllReadyFilter(false); }}>
+                  Tout effacer
+                </button>
+              )}
+            </div>
+
+            {/* Wine list */}
             {filtered.length === 0 ? (
-              <div className="no-bottles">Aucun résultat</div>
+              <div className="no-bottles">
+                {activeFiltersCount > 0 || allFilter
+                  ? "Aucun vin ne correspond à ces filtres"
+                  : "Aucune bouteille dans la cave"}
+              </div>
             ) : filtered.map(b => (
               <div key={b.ref} className="brow">
                 <div className="bthumb">
@@ -1392,6 +1452,7 @@ function App() {
                 </div>
               </div>
             ))}
+
             {confirm && (
               <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:30,display:"flex",alignItems:"flex-end",justifyContent:"center" }}
                 onClick={() => setConfirm(null)}>
@@ -1636,8 +1697,6 @@ function App() {
 
       {/* ══ TOAST ══ */}
       {toast && <div className="toast" key={toast + Date.now()}>{toast}</div>}
-
-
     </div>
   );
 }
@@ -1668,7 +1727,6 @@ function SearchList({ results, onSelect }) {
     </div>
   );
 }
-
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(<App />);
