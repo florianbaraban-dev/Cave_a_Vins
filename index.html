@@ -61,6 +61,91 @@ function isReady(b) {
 }
 
 // ═══════════════════════════════════════════
+// SMART SEARCH ENGINE
+// ═══════════════════════════════════════════
+
+/** Normalise une chaîne : minuscules + suppression des accents */
+function norm(s) {
+  return (s || "")
+    .toString()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+}
+
+/**
+ * Calcule un score de pertinence pour une bouteille vis-à-vis d'un token.
+ * Retourne 0 si aucun champ ne matche, > 0 sinon.
+ * Plus le score est élevé, plus la correspondance est précise.
+ */
+function scoreToken(b, token) {
+  const fields = [
+    { key: norm(b.nom),          weight: 10 },
+    { key: norm(b.producteur),   weight: 8  },
+    { key: norm(b.appellation),  weight: 6  },
+    { key: norm(b.region),       weight: 5  },
+    { key: norm(b.cepage),       weight: 5  },
+    { key: norm(b.sousRegion),   weight: 4  },
+    { key: norm(b.annee),        weight: 3  },
+    { key: norm(b.lieuAchat),    weight: 2  },
+    { key: norm(b.emplacement),  weight: 2  },
+    { key: String(b.rangement || ""), weight: 4 },
+  ];
+
+  let best = 0;
+  for (const { key, weight } of fields) {
+    if (!key) continue;
+    if (key === token)             { best = Math.max(best, weight * 3); continue; } // exact
+    if (key.startsWith(token))     { best = Math.max(best, weight * 2); continue; } // préfixe
+    if (key.includes(token))       { best = Math.max(best, weight);     continue; } // contient
+  }
+  return best;
+}
+
+/**
+ * Recherche intelligente multi-tokens.
+ * - Insensible aux accents et à la casse
+ * - Tous les tokens doivent matcher (logique AND)
+ * - Détecte "case N" / "N" comme numéro de case
+ * - Trie par score décroissant
+ */
+function smartSearch(bottles, query) {
+  const q = norm(query);
+  if (q.length < 1) return [];
+
+  // Détection requête type "case 3" → on extrait le numéro
+  const caseMatch = q.match(/^(?:case\s*)?(\d+)$/);
+
+  const tokens = q.split(/\s+/).filter(t => t.length > 0);
+
+  const scored = [];
+  for (const b of bottles) {
+    // Recherche par numéro de case exact
+    if (caseMatch) {
+      if (String(b.rangement) === caseMatch[1]) {
+        scored.push({ b, score: 999 });
+        continue;
+      }
+    }
+
+    // Score multi-token : chaque token doit avoir un score > 0
+    let total = 0;
+    let allMatch = true;
+    for (const token of tokens) {
+      const s = scoreToken(b, token);
+      if (s === 0) { allMatch = false; break; }
+      total += s;
+    }
+    if (allMatch) scored.push({ b, score: total });
+  }
+
+  return scored
+    .sort((a, b) => b.score - a.score)
+    .map(({ b }) => b);
+}
+
+// ═══════════════════════════════════════════
 // FETCH WITH RETRY + TIMEOUT
 // ═══════════════════════════════════════════
 async function fetchWithRetry(url, retries = 3, timeoutMs = 10000) {
@@ -786,15 +871,8 @@ function App() {
   }, [bottles, slot]);
 
   const searchResults = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (q.length < 2) return [];
-    return bottles
-      .filter(b =>
-        (b.nom || "").toLowerCase().includes(q) ||
-        (b.producteur || "").toLowerCase().includes(q) ||
-        (b.cepage || "").toLowerCase().includes(q)
-      )
-      .sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr"));
+    if (search.trim().length < 1) return [];
+    return smartSearch(bottles, search);
   }, [bottles, search]);
 
   const totalBottles = bottles.filter(b => b.rangement != null && b.rangement !== "").length;
@@ -1071,10 +1149,10 @@ function App() {
               {Ico.search}
               <input
                 className="sbar-input"
-                placeholder="Producteur, cépage, nom..."
+                placeholder="Nom, domaine, cépage, case…"
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                onFocus={() => { if (search.length >= 2) navTo("search"); }}
+                onFocus={() => { if (search.length >= 1) navTo("search"); }}
               />
               {search && (
                 <button style={{ background: "none", border: "none", color: "#5a4a3a", cursor: "pointer", fontSize: 18, lineHeight: 1 }}
@@ -1083,7 +1161,7 @@ function App() {
             </div>
           </div>
 
-          {search.length >= 2 ? (
+          {search.length >= 1 ? (
             <SearchList results={searchResults} onSelect={b => navTo("detail", { bottle: b })} />
           ) : (
             <>
@@ -1389,22 +1467,21 @@ function App() {
 
       {/* ══ ALL WINES VIEW ══ */}
       {view === "allwines" && (() => {
-        const q = allFilter.trim().toLowerCase();
-        const filtered = [...bottles]
-          .filter(b => {
-            const matchText = !q ||
-              (b.nom || "").toLowerCase().includes(q) ||
-              (b.producteur || "").toLowerCase().includes(q) ||
-              (b.cepage || "").toLowerCase().includes(q) ||
-              (b.region || "").toLowerCase().includes(q) ||
-              (b.appellation || "").toLowerCase().includes(q);
+        const filtered = (() => {
+          // Appliquer d'abord la recherche textuelle intelligente
+          let base = allFilter.trim().length > 0
+            ? smartSearch(bottles, allFilter)
+            : [...bottles].sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr"));
+
+          // Puis les filtres couleur & maturité
+          return base.filter(b => {
             const matchColor = !allColorFilter ||
               b.couleur === allColorFilter ||
               (allColorFilter === "Rosé" && (b.couleur === "Rose" || b.couleur === "Rosé"));
             const matchReady = !allReadyFilter || isReady(b);
-            return matchText && matchColor && matchReady;
-          })
-          .sort((a, b) => (a.nom || "").localeCompare(b.nom || "", "fr"));
+            return matchColor && matchReady;
+          });
+        })();
 
         const activeFiltersCount = (allColorFilter ? 1 : 0) + (allReadyFilter ? 1 : 0);
 
@@ -1426,7 +1503,7 @@ function App() {
             <div className="sbar" style={{ paddingBottom: 8 }}>
               <div className="sbar-inner">
                 {Ico.search}
-                <input className="sbar-input" placeholder="Filtrer…" value={allFilter}
+                <input className="sbar-input" placeholder="Nom, domaine, région, case…" value={allFilter}
                   onChange={e => setAllFilter(e.target.value)} />
                 {allFilter && (
                   <button style={{ background:"none",border:"none",color:"#5a4a3a",cursor:"pointer",fontSize:18,lineHeight:1 }}
@@ -1763,7 +1840,7 @@ function SearchList({ results, onSelect }) {
   return (
     <div>
       {results.length === 0 ? (
-        <div className="sempty">Tapez au moins 2 caractères pour rechercher</div>
+        <div className="sempty">Aucun résultat — essayez un nom, domaine ou numéro de case</div>
       ) : results.map(b => (
         <div key={b.ref} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 20px", borderBottom: "1px solid #1c1610", cursor: "pointer" }}
           onClick={() => onSelect(b)}>
