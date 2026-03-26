@@ -61,6 +61,28 @@ function isReady(b) {
 }
 
 // ═══════════════════════════════════════════
+// FETCH WITH RETRY + TIMEOUT
+// ═══════════════════════════════════════════
+async function fetchWithRetry(url, retries = 3, timeoutMs = 10000) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const r = await fetch(url, { signal: controller.signal });
+      clearTimeout(timer);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return await r.json();
+    } catch (err) {
+      clearTimeout(timer);
+      const isLast = attempt === retries;
+      if (isLast) throw err;
+      // Attente exponentielle : 1s, 2s, 4s...
+      await new Promise(res => setTimeout(res, 1000 * attempt));
+    }
+  }
+}
+
+// ═══════════════════════════════════════════
 // GOOGLE APPS SCRIPT CODE (for settings)
 // ═══════════════════════════════════════════
 const GAS_CODE = `// ─────────────────────────────────────────────────────────────────
@@ -94,10 +116,10 @@ const COL_MAP = {
 
 function normHdr(h) {
   return h.toString()
-    .replace(/\r?\n/g, ' ')
+    .replace(/\\r?\\n/g, ' ')
     .trim()
     .toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    .normalize('NFD').replace(/[\\u0300-\\u036f]/g, '');
 }
 
 function normCouleur(v) {
@@ -560,6 +582,10 @@ const CSS = `
     z-index: 60; animation: fadeIn 0.2s, fadeOut 0.3s 1.7s forwards;
     white-space: nowrap; box-shadow: 0 4px 16px rgba(0,0,0,0.4);
   }
+  .toast.err {
+    border-color: #9b203055; color: #c04050;
+    background: #1f0a10;
+  }
 
   /* ── STATS BAR ── */
   .stats { display: flex; gap: 0; padding: clamp(6px,1.5vw,12px) var(--pad) clamp(10px,2vw,16px); }
@@ -656,6 +682,7 @@ const CSS = `
   .app.light .bghst { border-color: var(--c-border); color: var(--c-text2); }
   .app.light .bdang { background: #fff0f0; border-color: #c04050; color: #9b2030; }
   .app.light .toast { background: var(--c-bg2); border-color: var(--c-gold); color: var(--c-gold); }
+  .app.light .toast.err { background: #fff0f0; border-color: #c04050; color: #9b2030; }
   .app.light .sett { background: var(--c-bg); }
   .app.light .sett-code { background: var(--c-bg3); border-color: var(--c-border); color: var(--c-text2); }
   .app.light .hr { border-color: var(--c-sep); }
@@ -690,6 +717,7 @@ const Ico = {
   edit:     <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
   moon:     <svg width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>,
   sun:      <svg width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>,
+  retry:    <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 .49-5.34L1 10"/></svg>,
 };
 
 // ═══════════════════════════════════════════
@@ -709,6 +737,7 @@ function App() {
   const [gasUrl, setGasUrl]       = useState(GAS_URL);
   const [gasInput, setGasInput]   = useState(GAS_URL);
   const [toast, setToast]         = useState(null);
+  const [toastType, setToastType] = useState("ok");
   const [confirm, setConfirm]     = useState(null);
   const [loading, setLoading]     = useState(false);
   const [navStack, setNavStack]   = useState([]);
@@ -720,6 +749,8 @@ function App() {
   const [allColorFilter, setAllColorFilter] = useState("");
   const [allReadyFilter, setAllReadyFilter] = useState(false);
   const [theme, setTheme]           = useState(() => localStorage.getItem('cave_theme') || 'dark');
+  // For retry on add error
+  const [lastFailedAction, setLastFailedAction] = useState(null);
   const toastRef                  = useRef(null);
 
   // ── INIT ──
@@ -783,8 +814,9 @@ function App() {
   const isDemo = !gasUrl;
 
   // ── METHODS ──
-  function showToast(msg) {
+  function showToast(msg, type = "ok") {
     setToast(msg);
+    setToastType(type);
     clearTimeout(toastRef.current);
     toastRef.current = setTimeout(() => setToast(null), 2100);
   }
@@ -822,14 +854,17 @@ function App() {
     if (!url) return;
     setLoading(true);
     try {
-      const r = await fetch(`${url}?action=get`);
-      const data = await r.json();
+      const data = await fetchWithRetry(`${url}?action=get`);
       if (Array.isArray(data)) {
         setBottles(data);
         showToast("Données chargées ✓");
       }
-    } catch {
-      showToast("Connexion impossible");
+    } catch(err) {
+      if (err.name === "AbortError") {
+        showToast("Délai dépassé — vérifiez votre connexion", "err");
+      } else {
+        showToast("Connexion impossible (3 tentatives)", "err");
+      }
     }
     setLoading(false);
   }
@@ -837,15 +872,21 @@ function App() {
   async function addBottle() {
     if (!form.nom.trim()) return;
     setLoading(true);
+    setLastFailedAction(null);
     if (gasUrl) {
       try {
         const encoded = encodeURIComponent(JSON.stringify(form));
-        await fetch(`${gasUrl}?action=add&data=${encoded}`);
+        await fetchWithRetry(`${gasUrl}?action=add&data=${encoded}`);
         await loadFromGas(gasUrl);
         showToast("Bouteille ajoutée ✓");
         goBack();
-      } catch {
-        showToast("Erreur de connexion");
+      } catch(err) {
+        if (err.name === "AbortError") {
+          showToast("Délai dépassé — réessayez", "err");
+        } else {
+          showToast("Erreur réseau (3 tentatives échouées)", "err");
+        }
+        setLastFailedAction("add");
       }
     } else {
       const nextRef = String(Math.max(0, ...bottles.map(b => Number(b.ref) || 0)) + 1);
@@ -861,11 +902,15 @@ function App() {
     setLoading(true);
     if (gasUrl) {
       try {
-        await fetch(`${gasUrl}?action=remove&ref=${encodeURIComponent(ref)}`);
+        await fetchWithRetry(`${gasUrl}?action=remove&ref=${encodeURIComponent(ref)}`);
         await loadFromGas(gasUrl);
         showToast("Bouteille retirée ✓");
-      } catch {
-        showToast("Erreur de connexion");
+      } catch(err) {
+        if (err.name === "AbortError") {
+          showToast("Délai dépassé — réessayez", "err");
+        } else {
+          showToast("Erreur réseau (3 tentatives échouées)", "err");
+        }
       }
     } else {
       setBottles(prev => prev.filter(b => b.ref !== ref));
@@ -887,13 +932,19 @@ function App() {
     setLoading(true);
     if (gasUrl) {
       try {
-        await fetch(`${gasUrl}?action=remove&ref=${encodeURIComponent(editRef)}`);
+        await fetchWithRetry(`${gasUrl}?action=remove&ref=${encodeURIComponent(editRef)}`);
         const encoded = encodeURIComponent(JSON.stringify({ ...editForm, ref: editRef }));
-        await fetch(`${gasUrl}?action=add&data=${encoded}`);
+        await fetchWithRetry(`${gasUrl}?action=add&data=${encoded}`);
         await loadFromGas(gasUrl);
         showToast("Bouteille modifiée ✓");
         goBack();
-      } catch { showToast("Erreur de connexion"); }
+      } catch(err) {
+        if (err.name === "AbortError") {
+          showToast("Délai dépassé — réessayez", "err");
+        } else {
+          showToast("Erreur réseau (3 tentatives échouées)", "err");
+        }
+      }
     } else {
       setBottles(prev => prev.map(b => b.ref === editRef ? { ...editForm, ref: editRef } : b));
       showToast("Bouteille modifiée ✓");
@@ -916,7 +967,7 @@ function App() {
       const r = Number(b.rangement);
       return r >= offset + 1 && r <= offset + 8;
     });
-    if (hasBtl) { showToast("Retirez d'abord les bouteilles de cette cave"); return; }
+    if (hasBtl) { showToast("Retirez d'abord les bouteilles de cette cave", "err"); return; }
     const newC = caves.filter(x => x !== c);
     setCaves(newC);
     localStorage.setItem("cave_list", JSON.stringify(newC));
@@ -1305,9 +1356,16 @@ function App() {
             </div>
           </div>
           <div className="stick-btn">
-            <button className="btnp" onClick={addBottle} disabled={!form.nom.trim() || loading}>
-              {loading ? "Enregistrement…" : "Ajouter la bouteille"}
-            </button>
+            {lastFailedAction === "add" ? (
+              <button className="btnp" onClick={addBottle} disabled={loading}
+                style={{ background: "#9b2030", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                {Ico.retry} Réessayer l'envoi
+              </button>
+            ) : (
+              <button className="btnp" onClick={addBottle} disabled={!form.nom.trim() || loading}>
+                {loading ? "Envoi en cours…" : "Ajouter la bouteille"}
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -1365,7 +1423,6 @@ function App() {
               <button className="ibtn" onClick={() => navTo("settings")} title="Paramètres">{Ico.settings}</button>
             </div>
 
-            {/* Search bar */}
             <div className="sbar" style={{ paddingBottom: 8 }}>
               <div className="sbar-inner">
                 {Ico.search}
@@ -1378,7 +1435,6 @@ function App() {
               </div>
             </div>
 
-            {/* Filter chips */}
             <div className="fchips">
               <button
                 className={`fchip ${allReadyFilter ? "fchip-ready-on" : ""}`}
@@ -1416,7 +1472,6 @@ function App() {
               )}
             </div>
 
-            {/* Wine list */}
             {filtered.length === 0 ? (
               <div className="no-bottles">
                 {activeFiltersCount > 0 || allFilter
@@ -1618,7 +1673,7 @@ function App() {
             </div>
             {gasUrl && (
               <button className="bghst" style={{ marginTop: 8, width: "100%" }} onClick={() => loadFromGas(gasUrl)}>
-                Synchroniser maintenant
+                {loading ? "Synchronisation…" : "Synchroniser maintenant"}
               </button>
             )}
           </div>
@@ -1696,7 +1751,7 @@ function App() {
       )}
 
       {/* ══ TOAST ══ */}
-      {toast && <div className="toast" key={toast + Date.now()}>{toast}</div>}
+      {toast && <div className={`toast ${toastType === "err" ? "err" : ""}`} key={toast + Date.now()}>{toast}</div>}
     </div>
   );
 }
