@@ -9,6 +9,7 @@ import EditView     from './components/views/EditView';
 import SearchView   from './components/views/SearchView';
 import AllWinesView from './components/views/AllWinesView';
 import SettingsView from './components/views/SettingsView';
+import HistoryView  from './components/views/HistoryView';
 
 // ── UI overlay ────────────────────────────────────────────────────
 import BottomSheet from './components/ui/BottomSheet';
@@ -61,7 +62,7 @@ export default function App() {
           goBack={s.goBack}
           navTo={s.navTo}
           openAdd={s.openAdd}
-          removeBottle={s.removeBottle}
+          removeBottle={s.archiveBottle}
         />
       )}
 
@@ -109,13 +110,23 @@ export default function App() {
           openEdit={s.openEdit}
           confirm={s.confirm}
           setConfirm={s.setConfirm}
-          removeBottle={s.removeBottle}
+          removeBottle={s.archiveBottle}
           allFilter={s.allFilter}
           setAllFilter={s.setAllFilter}
           allColorFilter={s.allColorFilter}
           setAllColorFilter={s.setAllColorFilter}
           allReadyFilter={s.allReadyFilter}
           setAllReadyFilter={s.setAllReadyFilter}
+        />
+      )}
+
+      {s.view === 'history' && (
+        <HistoryView
+          archivedBottles={s.archivedBottles}
+          goBack={s.goBack}
+          navTo={s.navTo}
+          restoreBottle={s.restoreBottle}
+          loading={s.loading}
         />
       )}
 

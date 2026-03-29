@@ -21,9 +21,15 @@ export default function AllWinesView({
   allColorFilter, setAllColorFilter,
   allReadyFilter, setAllReadyFilter,
 }) {
+  // Exclure les bouteilles archivées (rangement = 0)
+  const activeBottles = useMemo(() =>
+    bottles.filter(b => Number(b.rangement) !== 0),
+    [bottles]
+  );
+
   const filtered = useMemo(() => {
     const q = allFilter.trim().toLowerCase();
-    return [...bottles]
+    return [...activeBottles]
       .filter(b => {
         const matchText = !q ||
           (b.nom || '').toLowerCase().includes(q) ||
@@ -53,11 +59,14 @@ export default function AllWinesView({
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="phdr-title">Tous les vins</div>
           <div className="phdr-sub">
-            {filtered.length !== bottles.length
-              ? `${filtered.length} / ${bottles.length} bouteille${bottles.length > 1 ? 's' : ''}`
-              : `${bottles.length} bouteille${bottles.length > 1 ? 's' : ''}`}
+            {filtered.length !== activeBottles.length
+              ? `${filtered.length} / ${activeBottles.length} bouteille${activeBottles.length > 1 ? 's' : ''}`
+              : `${activeBottles.length} bouteille${activeBottles.length > 1 ? 's' : ''}`}
           </div>
         </div>
+        <button className="ibtn" onClick={() => navTo('history')} title="Historique">
+          🗂
+        </button>
         <button className="ibtn" onClick={() => navTo('settings')} title="Paramètres">
           {Ico.settings}
         </button>
@@ -135,6 +144,9 @@ export default function AllWinesView({
         </div>
       ) : (
         filtered.map(b => (
+        </div>
+      ) : (
+        filtered.map(b => (
           <div key={b.ref} className="brow">
             <div className="bthumb">
               {b.image ? <img src={b.image} alt={b.nom} /> : '🍾'}
@@ -162,7 +174,7 @@ export default function AllWinesView({
 
             <div className="bactions">
               <button className="abtn" onClick={() => openEdit(b)} title="Modifier">{Ico.edit}</button>
-              <button className="abtn del" onClick={() => setConfirm(b)} title="Retirer">{Ico.trash}</button>
+              <button className="abtn del" onClick={() => setConfirm(b)} title="Archiver">{Ico.trash}</button>
             </div>
           </div>
         ))

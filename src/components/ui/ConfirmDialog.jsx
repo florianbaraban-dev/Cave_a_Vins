@@ -5,7 +5,7 @@
 export default function ConfirmDialog({ bottle, onCancel, onConfirm, overlay = false }) {
   const inner = (
     <div className="confirm-box" onClick={e => e.stopPropagation()}>
-      <div className="confirm-t">Retirer cette bouteille ?</div>
+      <div className="confirm-t">Archiver cette bouteille ?</div>
       <div className="confirm-d">
         <strong>{bottle.nom}</strong>
         {bottle.producteur ? ` — ${bottle.producteur}` : ''}
@@ -13,7 +13,7 @@ export default function ConfirmDialog({ bottle, onCancel, onConfirm, overlay = f
       </div>
       <div className="confirm-acts">
         <button className="bghst" onClick={onCancel}>Annuler</button>
-        <button className="bdang" onClick={() => onConfirm(bottle.ref)}>Retirer</button>
+        <button className="bdang" onClick={() => onConfirm(bottle.ref)}>Archiver</button>
       </div>
     </div>
   );
@@ -29,7 +29,7 @@ export default function ConfirmDialog({ bottle, onCancel, onConfirm, overlay = f
       >
         <div style={{ background: '#1e1812', border: '1px solid #322619', borderRadius: '16px 16px 0 0', padding: 20, width: '100%', maxWidth: 560 }}
           onClick={e => e.stopPropagation()}>
-          <div className="confirm-t">Retirer cette bouteille ?</div>
+          <div className="confirm-t">Archiver cette bouteille ?</div>
           <div className="confirm-d" style={{ marginTop: 6 }}>
             <strong>{bottle.nom}</strong>
             {bottle.producteur ? ` — ${bottle.producteur}` : ''}
@@ -37,7 +37,7 @@ export default function ConfirmDialog({ bottle, onCancel, onConfirm, overlay = f
           </div>
           <div className="confirm-acts" style={{ marginTop: 16 }}>
             <button className="bghst" onClick={onCancel}>Annuler</button>
-            <button className="bdang" onClick={() => onConfirm(bottle.ref)}>Retirer</button>
+            <button className="bdang" onClick={() => onConfirm(bottle.ref)}>Archiver</button>
           </div>
         </div>
       </div>

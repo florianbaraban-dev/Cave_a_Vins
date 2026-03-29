@@ -99,8 +99,16 @@ export function useCave() {
       .sort((a, b) => (a.nom || '').localeCompare(b.nom || '', 'fr'));
   }, [bottles, search]);
 
-  /** Statistiques globales. */
-  const totalBottles = bottles.filter(b => b.rangement != null && b.rangement !== '').length;
+  /** Statistiques globales (hors archivés). */
+  const totalBottles = bottles.filter(b => b.rangement != null && b.rangement !== '' && Number(b.rangement) !== 0).length;
+
+  /** Bouteilles archivées (rangement = '0'). */
+  const archivedBottles = useMemo(() =>
+    bottles
+      .filter(b => Number(b.rangement) === 0)
+      .sort((a, b) => (a.nom || '').localeCompare(b.nom || '', 'fr')),
+    [bottles]
+  );
   const rougeCount   = bottles.filter(b => b.couleur === 'Rouge').length;
   const blancCount   = bottles.filter(b => b.couleur === 'Blanc').length;
 
@@ -192,18 +200,41 @@ export function useCave() {
     setLoading(false);
   }
 
-  async function removeBottle(ref) {
+  async function archiveBottle(ref) {
     setConfirm(null);
     setLoading(true);
+    const target = bottles.find(b => b.ref === ref);
+    if (!target) { setLoading(false); return; }
     if (gasUrl) {
       try {
         await fetch(`${gasUrl}?action=remove&ref=${encodeURIComponent(ref)}`);
+        const archived = encodeURIComponent(JSON.stringify({ ...target, rangement: '0' }));
+        await fetch(`${gasUrl}?action=add&data=${archived}`);
         await loadFromGas(gasUrl, true);
-        showToast('Bouteille retirée ✓');
+        showToast('Bouteille archivée ✓');
       } catch { showToast('Erreur de connexion'); }
     } else {
-      setBottles(prev => prev.filter(b => b.ref !== ref));
-      showToast('Bouteille retirée ✓');
+      setBottles(prev => prev.map(b => b.ref === ref ? { ...b, rangement: '0' } : b));
+      showToast('Bouteille archivée ✓');
+    }
+    setLoading(false);
+  }
+
+  async function restoreBottle(ref) {
+    setLoading(true);
+    const target = bottles.find(b => b.ref === ref);
+    if (!target) { setLoading(false); return; }
+    if (gasUrl) {
+      try {
+        await fetch(`${gasUrl}?action=remove&ref=${encodeURIComponent(ref)}`);
+        const restored = encodeURIComponent(JSON.stringify({ ...target, rangement: '' }));
+        await fetch(`${gasUrl}?action=add&data=${restored}`);
+        await loadFromGas(gasUrl, true);
+        showToast('Bouteille restaurée ✓');
+      } catch { showToast('Erreur de connexion'); }
+    } else {
+      setBottles(prev => prev.map(b => b.ref === ref ? { ...b, rangement: '' } : b));
+      showToast('Bouteille restaurée ✓');
     }
     setLoading(false);
   }
@@ -309,8 +340,9 @@ export function useCave() {
     allReadyFilter, setAllReadyFilter,
     // stats
     totalBottles, rougeCount, blancCount, totalValeur,
+    archivedBottles,
     // actions
-    loadFromGas, addBottle, removeBottle, openEdit, saveEdit,
+    loadFromGas, addBottle, archiveBottle, restoreBottle, openEdit, saveEdit,
     addCave, deleteCave, saveGas, copyGas, toggleTheme,
     openSlot, openList, openAdd,
     fset, efset,
